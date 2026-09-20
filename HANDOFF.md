@@ -1,79 +1,136 @@
 # MultiBooker Handoff
 
-## Objective
+## Current state
 
-MultiBooker is a mobile-first group scheduling site for quickly finding and confirming time windows that work for a required number of people. The primary example is coordinating four-person doubles matches among a larger group of adults.
+MultiBooker v1 is implemented and live.
 
-## Source of truth
+Production URL: https://multibooker-api.jonathanjablon.workers.dev/
 
-- Application repository: `to-shreds/MultiBooker`
-- Default branch: `main`
-- Frontend production target: `https://to-shreds.github.io/MultiBooker/`
-- Worker production target: `https://multibooker-api.jonathanjablon.workers.dev`
-- Readiness record: `to-shreds/ProjectStatus/projects/multibooker/STATUS.md`
+Canonical application repository: `to-shreds/MultiBooker`, branch `main`.
 
-## Current architecture
+The repository is the source of truth for the frontend, Worker, scheduling logic, tests, and deployment configuration. The production Worker serves the static frontend and API together. Shared group state is stored in SQLite-backed Cloudflare Durable Objects.
 
-- Plain HTML/CSS/JavaScript frontend at repository root, served by GitHub Pages.
-- Cloudflare Worker in `worker/`.
-- One SQLite-backed Durable Object named `BookingGroup` per normalized group code.
-- GitHub Actions for verification, Pages deployment, and Worker deployment.
+## Product behavior
 
-## Product decisions that control the current implementation
+- Create a reusable scheduling group with a chosen or generated group code.
+- Organizer chooses the number of people required.
+- More participants may join than are required for a booking.
+- Configure a date range, activity duration, allowed weekdays, weekday hours, and weekend hours.
+- Availability is entered in 30-minute blocks as Available, Maybe, Unavailable, or unanswered.
+- MultiBooker evaluates the complete activity duration for every candidate start time.
+- Candidate times are ranked automatically so users do not need to compare the raw grid manually.
+- Enough definite participants produces a ready candidate.
+- Definite plus maybe participants can produce a possible candidate.
+- Unanswered availability is kept distinct from Unavailable.
+- Organizer selects the exact required roster and confirms a time with the organizer PIN.
+- A confirmed booking is flagged if later availability changes break it.
+- New booking rounds retain the participant list and archive recent booking results.
+- Organizer can remove participants.
+- Direct group links use `?group=CODE`.
 
-- No participant accounts.
-- Organizer-only actions use a 4 to 8 digit PIN. The default generated PIN is six digits.
-- Participant status has four states: unanswered, available, maybe, unavailable.
-- Scheduling granularity is 30 minutes.
-- Activity length is configurable in 30-minute increments from 30 minutes through 6 hours.
-- Weekday and weekend general hours can be different.
-- Individual weekdays can be enabled or disabled.
-- A group can contain more participants than the number required for a booking.
-- Candidate calculations evaluate the full activity duration across consecutive blocks.
-- Ranked results favor enough definite availability first, then fewer maybes and unanswered responses, then earlier times.
-- The organizer confirms the time manually and chooses exactly the required number of participants.
-- A confirmed booking is flagged if a selected participant later changes availability so the booking no longer works.
-- Groups are reusable. Starting another booking preserves participants and recent booking history while clearing availability.
+## Architecture
 
-## API
+Frontend:
+- `index.html`
+- `styles.css`
+- `app.js`
+- `manifest.webmanifest`
 
-- `GET /health`
-- `POST /api/groups`
-- `GET /api/groups/:code`
-- `POST /api/groups/:code/participants`
-- `PUT /api/groups/:code/availability`
-- `POST /api/groups/:code/confirm`
-- `POST /api/groups/:code/unconfirm`
-- `POST /api/groups/:code/rounds`
-- `DELETE /api/groups/:code/participants/:participantId`
+Backend:
+- `worker/src/index.js`
+- `worker/src/core.js`
+- `worker/wrangler.toml`
+- `worker/test/core.test.mjs`
 
-## Security and identity constraints
+Cloudflare Worker:
+- name: `multibooker-api`
+- production URL: https://multibooker-api.jonathanjablon.workers.dev/
+- Durable Object binding: `BOOKING_GROUPS`
+- Durable Object class: `BookingGroup`
+- current storage model: SQLite-backed Durable Object, one logical object per normalized group code
 
-Organizer PINs are salted and hashed before persistence. Participant identity is intentionally lightweight: a browser stores its participant ID, while entering an existing exact participant name rejoins that participant. This is suitable for friendly groups but is not strong authentication. Do not silently describe participant identity as secure authentication. A future hardening path is per-participant edit tokens.
+Static assets:
+- `worker/public/` is generated during CI/deployment and is intentionally ignored by Git.
+- Deployment copies the four root frontend files there.
+- Wrangler uploads those assets with the Worker.
+- API and health paths run through the Worker first.
 
-CORS should remain restricted to the GitHub Pages origin and explicit local development origins.
+## Deployment
 
-## Verification completed before initial repository publication
+The Cloudflare credentials already existed as repository-scoped GitHub Actions secrets in `to-shreds/arcade`, not in the new MultiBooker repository.
 
-- `node --check app.js`
-- `node --check worker/src/core.js`
-- `node --check worker/src/index.js`
-- `npm test` under `worker/`: 5 tests passing
-- HTML parsed successfully with Python's standard HTML parser.
+Production deployment therefore uses this credential-only bridge:
 
-The local environment did not have outbound npm access, so a local Wrangler dry-run could not complete. The GitHub verification workflow is intended to perform that check in CI.
+`to-shreds/arcade/.github/workflows/deploy-multibooker-worker.yml`
+
+That workflow:
+1. Checks out the current `to-shreds/MultiBooker` `main` branch.
+2. Generates `worker/public/` from the canonical root frontend files.
+3. Installs dependencies and runs `npm run check`.
+4. Deploys with the existing Cloudflare account credentials.
+5. Verifies both the production `/health` endpoint and the production root HTML.
+
+Do not move application source into Arcade. The Arcade workflow is only a deployment credential bridge.
+
+MultiBooker itself keeps `.github/workflows/verify.yml`, which validates every push and pull request. The earlier direct Worker deploy and GitHub Pages workflows were intentionally removed because the new repository does not contain the existing Cloudflare secrets and the current GitHub integration cannot activate a new Pages site. The production Worker static-assets deployment removes both dependencies.
+
+## Verification completed on September 20, 2026
+
+Repository/source checks:
+- Exact large-source Git blob hashes were compared after bootstrap and matched the locally tested files.
+- MultiBooker GitHub CI passes.
+- Browser JavaScript syntax passes.
+- Worker source syntax passes.
+- Wrangler dry-run with generated static assets passes.
+- Worker npm audit during deployment reported zero vulnerabilities.
+
+Scheduling tests pass:
+1. Group-code normalization.
+2. Weekday/weekend 30-minute slot construction.
+3. Full activity-duration evaluation.
+4. Definite availability ranking ahead of Maybe.
+5. Exact required-player confirmation and unanswered-slot rejection.
+
+Production deployment checks pass:
+- Wrangler deployed the Worker and four static assets.
+- `GET /health` returned `{"ok":true,"service":"multibooker-api","version":"0.1.0"}`.
+- The production root returned the MultiBooker HTML.
+- A one-time live smoke test created a real throwaway group, added a second participant, saved both participants' availability, found a 60-minute candidate as `ready`, confirmed the exact two-person roster, and read the confirmed booking back successfully.
+- The one-time smoke step was removed after that successful test.
+
+## Security and identity model
+
+Organizer PIN:
+- 4 to 8 digits.
+- Stored only as salted SHA-256.
+- Required for confirmation, unconfirmation, new rounds, and participant removal.
+
+Participant identity:
+- Deliberately account-free for v1.
+- Group code plus exact participant name can recover that participant identity.
+- Browser local storage remembers participant IDs and organizer PINs on that device.
+- This is suitable for low-sensitivity friend scheduling, not sensitive data.
+- A future hardening path is per-participant edit tokens.
 
 ## Do not break
 
-- Keep the static frontend deployable independently from the Worker.
-- Keep the Worker URL in `app.js` synchronized with `worker/wrangler.toml` if the Worker name or account subdomain changes.
-- Do not reduce candidate evaluation to a single start block. Every 30-minute block covered by the activity must qualify.
-- Do not treat unanswered availability as unavailable or as a maybe.
-- Do not treat a "could work" result as equivalent to confirmed availability.
-- Do not auto-confirm a booking merely because a candidate becomes viable.
-- Do not require every member of a group to participate when `requiredPeople` is smaller than the participant count.
-- Preserve reusable groups and the participant list across booking rounds.
+- GitHub remains the canonical source.
+- Do not maintain a separate editable copy of frontend source under `worker/public/`.
+- Keep unanswered distinct from Unavailable.
+- Candidate evaluation must cover the entire activity duration.
+- More participants than required must remain supported.
+- Confirmation must require exactly `requiredPeople` participants who are Available or Maybe for the full duration.
+- Keep the raw availability editor secondary to the ranked answer to “when can we do this?”
+- Preserve reusable groups and booking-round history.
+- Preserve the existing Worker name and production URL unless all client references and deployment configuration are deliberately migrated together.
 
-## Next action
+## Known limitations
 
-Verify the first GitHub Actions runs after publication. If Worker deployment reports missing Cloudflare secrets, add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` to this repository or make the existing account-level secrets available to it. If the Pages workflow reports that Pages is not configured, set the repository's Pages publishing source to GitHub Actions. Once both endpoints are live, run an end-to-end create, join, availability, confirm, revise, and new-round smoke test before declaring the application ready.
+- Participant identity is convenience-based rather than strongly authenticated.
+- There are no notifications, calendar integrations, or court/venue reservations in v1.
+- Confirming a booking records the agreed time but does not create an external calendar event.
+- The deployment bridge must be run when a production deployment is desired because the Cloudflare Actions secrets remain scoped to Arcade.
+
+## Next logical work
+
+Use the live app with a real scheduling group and collect UX feedback. The most likely v1.1 improvements are participant edit tokens, calendar export, optional notifications, per-date hour overrides, and a cleaner production hostname if desired. Do not add those merely because they are listed here.
