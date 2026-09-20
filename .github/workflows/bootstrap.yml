@@ -50,3 +50,4 @@ jobs:
           git add app.js styles.css worker/src/core.js worker/src/index.js .github/workflows
           git commit -m "Complete initial MultiBooker build"
           git push
+
