@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "index.html"
+      - "styles.css"
+      - "app.js"
+      - "manifest.webmanifest"
       - "worker/**"
       - ".github/workflows/deploy-worker.yml"
   workflow_dispatch:
@@ -28,6 +32,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Prepare Worker static assets
+        run: |
+          mkdir -p worker/public
+          cp index.html styles.css app.js manifest.webmanifest worker/public/
+
       - name: Install and test Worker
         working-directory: worker
         run: npm install && npm run check
@@ -40,4 +49,7 @@ jobs:
           workingDirectory: worker
           command: deploy
 
-# Initial deployment trigger
+      - name: Verify deployed Worker
+        run: |
+          curl --fail --silent --show-error https://multibooker-api.jonathanjablon.workers.dev/health
+          curl --fail --silent --show-error https://multibooker-api.jonathanjablon.workers.dev/ | grep -q "MultiBooker"
