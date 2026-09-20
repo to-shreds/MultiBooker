@@ -1,0 +1,16 @@
+{
+  "name": "multibooker-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "syntax": "node --check src/core.js && node --check src/index.js",
+    "check": "npm run syntax && npm test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.135.0"
+  }
+}

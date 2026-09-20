@@ -1,0 +1,15 @@
+name = "multibooker-api"
+main = "src/index.js"
+compatibility_date = "2026-09-20"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGINS = "https://to-shreds.github.io,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8787,http://127.0.0.1:8787"
+
+[[durable_objects.bindings]]
+name = "BOOKING_GROUPS"
+class_name = "BookingGroup"
+
+[exports.BookingGroup]
+type = "durable-object"
+storage = "sqlite"
