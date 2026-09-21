@@ -26,6 +26,8 @@
   let availabilityTimer = null;
   let pendingUpdates = {};
   let availabilitySaving = false;
+  let activeGroupTab = 'availability';
+  let availabilityMode = 'yes';
 
   const esc = (value) => String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -33,6 +35,11 @@
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+
+  function setGroupView(enabled) {
+    document.body.classList.toggle('group-view', Boolean(enabled));
+    app.classList.toggle('group-mode', Boolean(enabled));
+  }
 
   function toast(message, kind = '') {
     clearTimeout(toastTimer);
@@ -96,6 +103,7 @@
   }
 
   function goHome() {
+    setGroupView(false);
     state = null;
     currentCode = null;
     pendingUpdates = {};
@@ -140,6 +148,7 @@
   }
 
   function renderHome() {
+    setGroupView(false);
     refreshButton.classList.add('hidden');
     app.innerHTML = `
       <div class="home-shell">
@@ -170,6 +179,7 @@
   }
 
   function renderCreateForm() {
+    setGroupView(false);
     const code = generateCode();
     const pin = generatePin();
     app.innerHTML = `
@@ -299,6 +309,7 @@
       saveIdentity(created.code, created.participantId, body.organizerName.trim());
       state = created;
       activeDate = state.schedule[0]?.date || null;
+      activeGroupTab = 'availability';
       setGroupUrl(created.code);
       renderGroup();
       toast(`Group ${created.code} created.`);
@@ -310,6 +321,7 @@
   }
 
   function renderJoinForm(prefillCode = '') {
+    setGroupView(false);
     app.innerHTML = `
       <div class="home-shell">
         <button class="link-button" id="backHome" type="button">← Back</button>
@@ -357,6 +369,7 @@
       saveIdentity(joined.code, joined.participantId, name);
       state = joined;
       activeDate = state.schedule[0]?.date || null;
+      activeGroupTab = 'availability';
       setGroupUrl(joined.code);
       renderGroup();
     } catch (error) {
@@ -384,6 +397,7 @@
   }
 
   function renderJoinGroupIdentity() {
+    setGroupView(false);
     app.innerHTML = `
       <div class="home-shell">
         <button class="link-button" id="backHome" type="button">← Home</button>
@@ -468,8 +482,9 @@
   }
 
   function bestCandidates() {
-    const meaningful = state.candidates.filter((candidate) => candidate.classification !== 'conflict');
-    return (meaningful.length ? meaningful : state.candidates).slice(0, 8);
+    return state.candidates
+      .filter((candidate) => candidate.classification !== 'conflict')
+      .slice(0, 5);
   }
 
   function renderConfirmed() {
@@ -488,7 +503,13 @@
   function renderCandidates() {
     const candidates = bestCandidates();
     if (!candidates.length) {
-      return '<div class="card empty-state">No candidate start times exist inside this booking window.</div>';
+      const answered = state.participants.reduce((sum, participant) => sum + participant.answered, 0);
+      const total = state.participants.reduce((sum, participant) => sum + participant.totalSlots, 0);
+      return `
+        <div class="card empty-state compact-empty">
+          <strong>No workable overlap yet.</strong>
+          <span>${answered} of ${total} participant time blocks have been answered. Keep filling out availability and this list will update automatically.</span>
+        </div>`;
     }
     const organizer = Boolean(getOrganizerPin(currentCode));
     return `<div class="candidate-list">${candidates.map((candidate) => `
@@ -521,118 +542,169 @@
     const css = status || 'unknown';
     const label = status ? STATUS_LABELS[status] : STATUS_LABELS.unknown;
     const icon = status === 'yes' ? '✓' : status === 'maybe' ? '?' : status === 'no' ? '×' : '○';
-    return `<button class="slot-button ${css}" data-slot="${slotKey}" type="button"><span>${esc(formatTime(time))}</span><span class="slot-state">${icon} ${esc(label)}</span></button>`;
+    return `<button class="slot-button ${css}" data-slot="${slotKey}" type="button" aria-label="${esc(formatTime(time))}: ${esc(label)}"><span class="slot-time">${esc(formatTime(time))}</span><span class="slot-icon" aria-hidden="true">${icon}</span></button>`;
   }
 
   function renderAvailability() {
     const identity = getIdentity(currentCode);
+    const me = state.participants.find((participant) => participant.id === identity?.participantId);
     const day = state.schedule.find((item) => item.date === activeDate) || state.schedule[0];
-    if (!identity || !day) return '<div class="card empty-state">There are no editable time slots.</div>';
+    if (!identity || !me || !day) return '<div class="card empty-state">There are no editable time slots.</div>';
     activeDate = day.date;
+    const dayIndex = state.schedule.findIndex((item) => item.date === day.date);
+    const modeLabel = availabilityMode === 'yes' ? 'Available' : availabilityMode === 'maybe' ? 'Maybe' : availabilityMode === 'no' ? 'Unavailable' : 'Clear';
     return `
-      <div class="card availability-card">
-        <div class="availability-toolbar">
-          <strong>Your availability</strong>
-          <div class="muted small">Tap a time to cycle through the four states. Your changes save automatically.</div>
-          <div class="legend">
-            <span class="legend-item"><span class="legend-dot yes"></span> Available</span>
-            <span class="legend-item"><span class="legend-dot maybe"></span> Maybe</span>
-            <span class="legend-item"><span class="legend-dot no"></span> Unavailable</span>
-            <span class="legend-item"><span class="legend-dot unknown"></span> Not answered</span>
+      <section class="availability-panel">
+        <div class="availability-summary">
+          <div>
+            <div class="eyebrow">Editing as ${esc(me.name)}</div>
+            <h2>My availability</h2>
+          </div>
+          <div class="answer-progress"><strong>${me.answered}</strong><span>of ${me.totalSlots}</span></div>
+        </div>
+
+        <div class="date-picker-row">
+          <button class="date-nav" data-date-nav="-1" type="button" aria-label="Previous day" ${dayIndex <= 0 ? 'disabled' : ''}>‹</button>
+          <select id="dateSelect" aria-label="Choose date">
+            ${state.schedule.map((item) => `<option value="${item.date}" ${item.date === day.date ? 'selected' : ''}>${esc(formatDate(item.date, { weekday: 'short', month: 'short', day: 'numeric' }))}</option>`).join('')}
+          </select>
+          <button class="date-nav" data-date-nav="1" type="button" aria-label="Next day" ${dayIndex >= state.schedule.length - 1 ? 'disabled' : ''}>›</button>
+        </div>
+
+        <div class="marking-row">
+          <span class="marking-label">Tap times to mark:</span>
+          <div class="availability-modes" role="group" aria-label="Availability status">
+            <button class="availability-mode-button yes ${availabilityMode === 'yes' ? 'active' : ''}" data-mode="yes" type="button">✓ Available</button>
+            <button class="availability-mode-button maybe ${availabilityMode === 'maybe' ? 'active' : ''}" data-mode="maybe" type="button">? Maybe</button>
+            <button class="availability-mode-button no ${availabilityMode === 'no' ? 'active' : ''}" data-mode="no" type="button">× No</button>
+            <button class="availability-mode-button clear ${availabilityMode === 'clear' ? 'active' : ''}" data-mode="clear" type="button">○ Clear</button>
           </div>
         </div>
-        <div class="date-strip">
-          ${state.schedule.map((item) => `<button type="button" class="date-tab ${item.date === activeDate ? 'active' : ''}" data-date="${item.date}"><strong>${esc(formatDate(item.date, { weekday: 'short' }))}</strong>${esc(formatDate(item.date, { month: 'short', day: 'numeric' }))}</button>`).join('')}
+
+        <div class="slot-grid">
+          ${day.slots.map((slotKey) => slotButton(day, slotKey, identity.participantId)).join('')}
         </div>
-        <div class="day-editor">
-          <div class="day-editor-head">
-            <div>
-              <h3>${esc(formatDate(day.date, { weekday: 'long', month: 'long', day: 'numeric' }))}</h3>
-              <div class="muted small">${day.weekend ? 'Weekend' : 'Weekday'} booking window</div>
-            </div>
-            <div class="bulk-actions">
-              <button type="button" data-bulk="yes">All available</button>
-              <button type="button" data-bulk="maybe">All maybe</button>
-              <button type="button" data-bulk="no">All unavailable</button>
-              <button type="button" data-bulk="clear">Clear</button>
-            </div>
-          </div>
-          <div class="slot-list">
-            ${day.slots.map((slotKey) => slotButton(day, slotKey, identity.participantId)).join('')}
-          </div>
+
+        <div class="availability-footer">
+          <button class="secondary" id="fillDayButton" type="button">Mark whole day ${esc(modeLabel)}</button>
+          <span>Changes save automatically.</span>
         </div>
-      </div>`;
+      </section>`;
   }
 
   function renderGroup() {
     if (!state) return;
+    setGroupView(true);
     refreshButton.classList.remove('hidden');
     const identity = getIdentity(currentCode);
     const me = state.participants.find((participant) => participant.id === identity?.participantId);
     if (!me) return renderJoinGroupIdentity();
     const period = `${formatDate(state.round.startDate, { month: 'short', day: 'numeric' })} to ${formatDate(state.round.endDate, { month: 'short', day: 'numeric' })}`;
+    const confirmed = state.round.confirmed;
+
+    let panel = '';
+    if (activeGroupTab === 'best') {
+      panel = `
+        <section class="tab-screen best-times-screen">
+          <div class="tab-screen-head">
+            <div>
+              <div class="eyebrow">Automatic overlap</div>
+              <h2>Best times</h2>
+            </div>
+            <div class="tab-count">${bestCandidates().length}</div>
+          </div>
+          ${renderCandidates()}
+        </section>`;
+    } else if (activeGroupTab === 'group') {
+      panel = `
+        <section class="tab-screen group-info-screen">
+          <div class="group-share-card">
+            <div>
+              <div class="eyebrow">Group code</div>
+              <div class="large-code">${esc(state.code)}</div>
+            </div>
+            <div class="share-row">
+              <button class="ghost" id="copyCodeButton" type="button">Copy code</button>
+              <button class="secondary" id="shareButton" type="button">Share</button>
+            </div>
+          </div>
+          <div class="group-facts">
+            <span><strong>${state.requiredPeople}</strong> needed</span>
+            <span><strong>${esc(durationLabel(state.round.durationMinutes))}</strong> duration</span>
+            <span><strong>${state.participants.length}</strong> joined</span>
+          </div>
+          <div class="people-card">
+            <div class="tab-screen-head compact">
+              <div><div class="eyebrow">Participants</div><h2>People</h2></div>
+            </div>
+            <div class="participants">${renderParticipants()}</div>
+          </div>
+          <button class="ghost organizer-button" id="organizerButton" type="button">Organizer controls</button>
+        </section>`;
+    } else {
+      activeGroupTab = 'availability';
+      panel = renderAvailability();
+    }
+
     app.innerHTML = `
-      <section class="group-head">
-        <div class="group-title">
-          <div class="eyebrow">${esc(period)}</div>
-          <h1>${esc(state.name)}</h1>
-          <div class="group-meta">
-            <span class="code-chip">Code ${esc(state.code)}</span>
-            <span>${state.requiredPeople} needed</span>
-            <span>·</span>
-            <span>${esc(durationLabel(state.round.durationMinutes))}</span>
+      <div class="group-workspace">
+        <header class="compact-group-head">
+          <div class="compact-group-title">
+            <div class="eyebrow">${esc(period)}</div>
+            <h1>${esc(state.name)}</h1>
           </div>
-        </div>
-        <div class="share-row">
-          <button class="ghost" id="copyCodeButton" type="button">Copy code</button>
-          <button class="secondary" id="shareButton" type="button">Share group</button>
-        </div>
-      </section>
+          <button class="code-chip group-code-jump" data-group-tab-jump="group" type="button">${esc(state.code)}</button>
+        </header>
 
-      ${renderConfirmed()}
+        ${confirmed ? `
+          <button class="confirmed-strip ${confirmed.needsAttention ? 'attention' : ''}" data-group-tab-jump="best" type="button">
+            <span>${confirmed.needsAttention ? 'Needs attention' : 'Booked'}</span>
+            <strong>${esc(formatSlot(confirmed.startKey))}</strong>
+            <span>${esc(confirmed.participantNames.join(', '))}</span>
+          </button>` : ''}
 
-      <section class="section">
-        <div class="section-head">
-          <div>
-            <h2>Best times</h2>
-            <p class="muted small">Automatically ranked from everyone's current answers.</p>
-          </div>
-        </div>
-        ${renderCandidates()}
-      </section>
+        <div class="group-tab-panel">${panel}</div>
 
-      <section class="section">
-        <div class="section-head">
-          <div>
-            <h2>People</h2>
-            <p class="muted small">${state.participants.length} participant${state.participants.length === 1 ? '' : 's'} · ${state.requiredPeople} needed to book</p>
-          </div>
-        </div>
-        <div class="participants">${renderParticipants()}</div>
-      </section>
-
-      <section class="section">
-        <div class="section-head"><div><h2>Fill out your times</h2><p class="muted small">You are editing as ${esc(me.name)}.</p></div></div>
-        ${renderAvailability()}
-      </section>
-
-      <div class="organizer-row"><button class="ghost" id="organizerButton" type="button">Organizer controls</button></div>`;
+        <nav class="group-tabs" role="tablist" aria-label="Group sections">
+          <button class="group-tab-button ${activeGroupTab === 'availability' ? 'active' : ''}" data-group-tab="availability" type="button" role="tab" aria-selected="${activeGroupTab === 'availability'}"><span class="tab-icon">✓</span><span>My Times</span></button>
+          <button class="group-tab-button ${activeGroupTab === 'best' ? 'active' : ''}" data-group-tab="best" type="button" role="tab" aria-selected="${activeGroupTab === 'best'}"><span class="tab-icon">★</span><span>Best Times</span></button>
+          <button class="group-tab-button ${activeGroupTab === 'group' ? 'active' : ''}" data-group-tab="group" type="button" role="tab" aria-selected="${activeGroupTab === 'group'}"><span class="tab-icon">●</span><span>Group</span></button>
+        </nav>
+      </div>`;
 
     bindGroupEvents();
   }
 
   function bindGroupEvents() {
+    document.querySelectorAll('.group-tab-button').forEach((button) => button.addEventListener('click', () => {
+      activeGroupTab = button.dataset.groupTab;
+      renderGroup();
+    }));
+    document.querySelectorAll('[data-group-tab-jump]').forEach((button) => button.addEventListener('click', () => {
+      activeGroupTab = button.dataset.groupTabJump;
+      renderGroup();
+    }));
     document.querySelector('#copyCodeButton')?.addEventListener('click', async () => {
       await navigator.clipboard?.writeText(state.code);
       toast('Group code copied.');
     });
     document.querySelector('#shareButton')?.addEventListener('click', shareGroup);
-    document.querySelectorAll('.date-tab').forEach((button) => button.addEventListener('click', () => {
-      activeDate = button.dataset.date;
-      renderGroupPreservingScroll();
+    document.querySelector('#dateSelect')?.addEventListener('change', (event) => {
+      activeDate = event.target.value;
+      renderGroup();
+    });
+    document.querySelectorAll('[data-date-nav]').forEach((button) => button.addEventListener('click', () => {
+      const currentIndex = state.schedule.findIndex((item) => item.date === activeDate);
+      const nextIndex = Math.max(0, Math.min(state.schedule.length - 1, currentIndex + Number(button.dataset.dateNav)));
+      activeDate = state.schedule[nextIndex]?.date || activeDate;
+      renderGroup();
+    }));
+    document.querySelectorAll('.availability-mode-button').forEach((button) => button.addEventListener('click', () => {
+      availabilityMode = button.dataset.mode;
+      renderGroup();
     }));
     document.querySelectorAll('.slot-button').forEach((button) => button.addEventListener('click', () => cycleSlot(button)));
-    document.querySelectorAll('[data-bulk]').forEach((button) => button.addEventListener('click', () => bulkAvailability(button.dataset.bulk)));
+    document.querySelector('#fillDayButton')?.addEventListener('click', () => bulkAvailability(availabilityMode));
     document.querySelectorAll('.confirm-candidate').forEach((button) => button.addEventListener('click', () => openConfirm(button.dataset.start)));
     document.querySelector('#organizerButton')?.addEventListener('click', openOrganizer);
   }
@@ -654,18 +726,14 @@
   }
 
   function renderGroupPreservingScroll() {
-    const y = window.scrollY;
     renderGroup();
-    requestAnimationFrame(() => window.scrollTo({ top: y, behavior: 'auto' }));
   }
 
   function cycleSlot(button) {
     const slotKey = button.dataset.slot;
     const identity = getIdentity(currentCode);
     if (!identity) return;
-    const current = slotStatus(identity.participantId, slotKey);
-    const index = STATUS_ORDER.indexOf(current);
-    const next = STATUS_ORDER[(index + 1) % STATUS_ORDER.length];
+    const next = availabilityMode === 'clear' ? null : availabilityMode;
     if (!state.availability[identity.participantId]) state.availability[identity.participantId] = {};
     if (next) state.availability[identity.participantId][slotKey] = next;
     else delete state.availability[identity.participantId][slotKey];
@@ -679,14 +747,17 @@
     button.classList.add(css);
     const label = status ? STATUS_LABELS[status] : STATUS_LABELS.unknown;
     const icon = status === 'yes' ? '✓' : status === 'maybe' ? '?' : status === 'no' ? '×' : '○';
-    const stateSpan = button.querySelector('.slot-state');
-    if (stateSpan) stateSpan.textContent = `${icon} ${label}`;
+    const iconSpan = button.querySelector('.slot-icon');
+    if (iconSpan) iconSpan.textContent = icon;
+    const time = button.dataset.slot?.split('T')[1] || '';
+    button.setAttribute('aria-label', `${formatTime(time)}: ${label}`);
   }
 
   function bulkAvailability(value) {
     const day = state.schedule.find((item) => item.date === activeDate);
     const identity = getIdentity(currentCode);
     if (!day || !identity) return;
+    if (!state.availability[identity.participantId]) state.availability[identity.participantId] = {};
     const status = value === 'clear' ? null : value;
     const updates = {};
     for (const slotKey of day.slots) {
@@ -806,8 +877,8 @@
         saveOrganizerPin(currentCode, pin);
         state = updated;
         closeModal();
+        activeGroupTab = 'best';
         renderGroup();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         toast('Booking confirmed.');
       } catch (error) {
         if (error.status === 401) localStorage.removeItem(pinKey(currentCode));
@@ -902,9 +973,9 @@
         state = await api(`/api/groups/${encodeURIComponent(currentCode)}/rounds`, { method: 'POST', body: JSON.stringify(body) });
         saveOrganizerPin(currentCode, pin);
         activeDate = state.schedule[0]?.date || null;
+        activeGroupTab = 'availability';
         closeModal();
         renderGroup();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         toast('New booking window started.');
       } catch (error) {
         if (error.status === 401) localStorage.removeItem(pinKey(currentCode));
@@ -935,11 +1006,9 @@
 
   async function refreshGroup() {
     if (!currentCode) return;
-    const y = window.scrollY;
     try {
       state = await api(`/api/groups/${encodeURIComponent(currentCode)}`);
       renderGroup();
-      requestAnimationFrame(() => window.scrollTo({ top: y, behavior: 'auto' }));
       toast('Group refreshed.');
     } catch (error) {
       toast(error.message, 'error');
