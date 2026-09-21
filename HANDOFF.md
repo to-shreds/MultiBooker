@@ -2,35 +2,32 @@
 
 ## Current state
 
-MultiBooker v1 is implemented and live.
+MultiBooker v1.1 has a redesigned tabbed group workspace committed on `main` and deployed to the temporary Worker fallback.
 
-Production URL: https://multibooker-api.jonathanjablon.workers.dev/
+Canonical application repository: `to-shreds/MultiBooker`.
 
-Canonical application repository: `to-shreds/MultiBooker`, branch `main`.
+Current usable fallback URL: `https://multibooker-api.jonathanjablon.workers.dev/`.
 
-The repository is the source of truth for the frontend, Worker, scheduling logic, tests, and deployment configuration. The production Worker serves the static frontend and API together. Shared group state is stored in SQLite-backed Cloudflare Durable Objects.
+Target frontend URL: `https://to-shreds.github.io/MultiBooker/`.
+
+The remaining hosting blocker is GitHub Pages activation for this new repository. The Pages workflow is already committed, but GitHub rejects its Configure Pages step until the repository setting is enabled.
 
 ## Product behavior
 
-- Create a reusable scheduling group with a chosen or generated group code.
-- Organizer chooses the number of people required.
-- More participants may join than are required for a booking.
-- Configure a date range, activity duration, allowed weekdays, weekday hours, and weekend hours.
-- Availability is entered in 30-minute blocks as Available, Maybe, Unavailable, or unanswered.
-- MultiBooker evaluates the complete activity duration for every candidate start time.
-- Candidate times are ranked automatically so users do not need to compare the raw grid manually.
-- Enough definite participants produces a ready candidate.
-- Definite plus maybe participants can produce a possible candidate.
-- Unanswered availability is kept distinct from Unavailable.
-- Organizer selects the exact required roster and confirms a time with the organizer PIN.
-- A confirmed booking is flagged if later availability changes break it.
-- New booking rounds retain the participant list and archive recent booking results.
-- Organizer can remove participants.
-- Direct group links use `?group=CODE`.
+- Creating or joining a group lands directly on **My Times**.
+- The group workspace is split into **My Times**, **Best Times**, and **Group** tabs.
+- Availability entry no longer sits below candidate/conflict output.
+- My Times uses a compact date selector plus direct Available, Maybe, No, and Clear modes.
+- Time tiles apply the currently selected state directly instead of requiring repeated cycling.
+- A whole day can be marked with the current state in one action.
+- Best Times excludes conflict-only candidates. When no workable overlap exists, it shows a compact progress message instead of a wall of conflicts.
+- Group contains sharing, participant progress, and organizer controls.
+- Major sections do not require page scrolling. Long content can scroll within its active tab.
+- Reusable groups, full-duration candidate evaluation, extra invitees beyond required headcount, confirmation, booking history, and organizer controls remain preserved.
 
 ## Architecture
 
-Frontend:
+Canonical frontend source:
 - `index.html`
 - `styles.css`
 - `app.js`
@@ -42,95 +39,83 @@ Backend:
 - `worker/wrangler.toml`
 - `worker/test/core.test.mjs`
 
-Cloudflare Worker:
-- name: `multibooker-api`
-- production URL: https://multibooker-api.jonathanjablon.workers.dev/
-- Durable Object binding: `BOOKING_GROUPS`
-- Durable Object class: `BookingGroup`
-- current storage model: SQLite-backed Durable Object, one logical object per normalized group code
+Target production architecture:
 
-Static assets:
-- `worker/public/` is generated during CI/deployment and is intentionally ignored by Git.
-- Deployment copies the four root frontend files there.
-- Wrangler uploads those assets with the Worker.
-- API and health paths run through the Worker first.
+```text
+GitHub Pages -> frontend
+Cloudflare Worker -> API only
+Cloudflare Durable Object -> persistent group state
+```
 
-## Deployment
+Current temporary architecture:
 
-The Cloudflare credentials already existed as repository-scoped GitHub Actions secrets in `to-shreds/arcade`, not in the new MultiBooker repository.
+```text
+Cloudflare Worker -> API plus temporary copy of canonical GitHub frontend files
+```
 
-Production deployment therefore uses this credential-only bridge:
+The temporary Worker frontend exists only to avoid breaking the usable app before GitHub Pages is enabled. There is no separately maintained frontend copy.
 
-`to-shreds/arcade/.github/workflows/deploy-multibooker-worker.yml`
+## GitHub Pages blocker
 
-That workflow:
-1. Checks out the current `to-shreds/MultiBooker` `main` branch.
-2. Generates `worker/public/` from the canonical root frontend files.
-3. Installs dependencies and runs `npm run check`.
-4. Deploys with the existing Cloudflare account credentials.
-5. Verifies both the production `/health` endpoint and the production root HTML.
+Workflow: `.github/workflows/pages.yml`.
 
-Do not move application source into Arcade. The Arcade workflow is only a deployment credential bridge.
+Failed Pages run: `35563981239`.
 
-MultiBooker itself keeps `.github/workflows/verify.yml`, which validates every push and pull request. The earlier direct Worker deploy and GitHub Pages workflows were intentionally removed because the new repository does not contain the existing Cloudflare secrets and the current GitHub integration cannot activate a new Pages site. The production Worker static-assets deployment removes both dependencies.
+The static site build and `node --check app.js` succeeded. GitHub failed at `actions/configure-pages@v6` with:
 
-## Verification completed on September 20, 2026
+`Get Pages site failed. Please verify that the repository has Pages enabled and configured to build using GitHub Actions.`
 
-Repository/source checks:
-- Exact large-source Git blob hashes were compared after bootstrap and matched the locally tested files.
-- MultiBooker GitHub CI passes.
-- Browser JavaScript syntax passes.
-- Worker source syntax passes.
-- Wrangler dry-run with generated static assets passes.
-- Worker npm audit during deployment reported zero vulnerabilities.
+The connected GitHub tools do not expose the repository administration action required to enable a Pages site.
 
-Scheduling tests pass:
-1. Group-code normalization.
-2. Weekday/weekend 30-minute slot construction.
-3. Full activity-duration evaluation.
-4. Definite availability ranking ahead of Maybe.
-5. Exact required-player confirmation and unanswered-slot rejection.
+Required manual repository setting:
 
-Production deployment checks pass:
-- Wrangler deployed the Worker and four static assets.
-- `GET /health` returned `{"ok":true,"service":"multibooker-api","version":"0.1.0"}`.
-- The production root returned the MultiBooker HTML.
-- A one-time live smoke test created a real throwaway group, added a second participant, saved both participants' availability, found a 60-minute candidate as `ready`, confirmed the exact two-person roster, and read the confirmed booking back successfully.
-- The one-time smoke step was removed after that successful test.
+1. Open the MultiBooker repository.
+2. Open **Settings > Pages**.
+3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+4. Rerun the `Deploy MultiBooker to GitHub Pages` workflow.
 
-## Security and identity model
+After the Pages deployment succeeds, immediately remove the temporary `[assets]` block from `worker/wrangler.toml` and remove the static-file copy/root check from the Arcade deployment bridge.
 
-Organizer PIN:
-- 4 to 8 digits.
-- Stored only as salted SHA-256.
-- Required for confirmation, unconfirmation, new rounds, and participant removal.
+## Cloudflare deployment
 
-Participant identity:
-- Deliberately account-free for v1.
-- Group code plus exact participant name can recover that participant identity.
-- Browser local storage remembers participant IDs and organizer PINs on that device.
-- This is suitable for low-sensitivity friend scheduling, not sensitive data.
-- A future hardening path is per-participant edit tokens.
+Cloudflare credentials remain repository-scoped Actions secrets in `to-shreds/arcade`.
+
+Credential bridge: `to-shreds/arcade/.github/workflows/deploy-multibooker-worker.yml`.
+
+Latest fallback deployment after the tabbed redesign: bridge run `35564056273`, which completed successfully.
+
+Do not move application source into Arcade. The Arcade workflow exists only because that repository already has the Cloudflare deployment credentials.
+
+## Verification
+
+Already verified for the tabbed redesign:
+
+- `app.js` redesign commit `78d036e62249b01f795a0048268be77333a9b49e`: MultiBooker Verify run `35563931378` succeeded.
+- `styles.css` redesign commit `4692bd44a937fa90e31997613353bbc579dcd6e2`: MultiBooker Verify run `35563955834` succeeded.
+- Pages workflow source build on run `35563981239`: JavaScript validation and static site build succeeded before GitHub rejected the unenabled Pages site.
+- Worker fallback bridge run `35564056273`: succeeded after the hosting transition work.
+
+Final current-main verification must remain green before this handoff is treated as complete.
 
 ## Do not break
 
-- GitHub remains the canonical source.
-- Do not maintain a separate editable copy of frontend source under `worker/public/`.
-- Keep unanswered distinct from Unavailable.
-- Candidate evaluation must cover the entire activity duration.
+- GitHub is the canonical source of all frontend files.
+- **My Times** is the default group tab.
+- Availability entry must remain immediately accessible without scrolling through Best Times.
+- Best Times must remain a separate tab and should not show conflict-only rows.
+- Unanswered must remain distinct from Unavailable.
+- Candidate evaluation must cover the full activity duration.
 - More participants than required must remain supported.
 - Confirmation must require exactly `requiredPeople` participants who are Available or Maybe for the full duration.
-- Keep the raw availability editor secondary to the ranked answer to “when can we do this?”
 - Preserve reusable groups and booking-round history.
-- Preserve the existing Worker name and production URL unless all client references and deployment configuration are deliberately migrated together.
+- Do not create a second editable frontend source under `worker/public/`.
 
 ## Known limitations
 
-- Participant identity is convenience-based rather than strongly authenticated.
-- There are no notifications, calendar integrations, or court/venue reservations in v1.
-- Confirming a booking records the agreed time but does not create an external calendar event.
-- The deployment bridge must be run when a production deployment is desired because the Cloudflare Actions secrets remain scoped to Arcade.
+- GitHub Pages is not live until the repository setting above is enabled.
+- Participant identity remains convenience-based rather than strongly authenticated.
+- There are no notifications, calendar integrations, or court/venue reservations.
 
-## Next logical work
+## Next action
 
-Use the live app with a real scheduling group and collect UX feedback. The most likely v1.1 improvements are participant edit tokens, calendar export, optional notifications, per-date hour overrides, and a cleaner production hostname if desired. Do not add those merely because they are listed here.
+Enable GitHub Pages with Source set to GitHub Actions. Then rerun the Pages deployment, verify `https://to-shreds.github.io/MultiBooker/`, remove the temporary Worker frontend fallback, redeploy the Worker as API-only, and update ProjectStatus to READY.
