@@ -33,11 +33,6 @@ jobs:
         working-directory: worker
         run: npm run check
 
-      - name: Prepare Worker static assets
-        run: |
-          mkdir -p worker/public
-          cp index.html styles.css app.js manifest.webmanifest worker/public/
-
-      - name: Validate Worker bundle
+      - name: Validate API-only Worker bundle
         working-directory: worker
         run: npx wrangler deploy --dry-run --outdir .wrangler/dry-run
